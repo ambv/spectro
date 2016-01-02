@@ -1,0 +1,4 @@
+Pillow==3.0.0
+-e git+https://github.com/tuffy/python-audio-tools.git@49762a3eeced5a9fcb5df406602cb2bd4eeadbb6#egg=audiotools-origin/HEAD
+docopt==0.6.2
+numpy==1.10.2
