@@ -28,7 +28,9 @@ In its most basic form, just do::
 
   $ . .venv/bin/activate
   (.venv) $ spectro.py song.flac
-  ...
+
+This will generate a PNG file in the current working directory::
+
   $ ls *.png
   song.flac.png
 

@@ -21,7 +21,6 @@ Options:
                        calculations will result in a ripple effect. Note: ideas how
                        to minimize those artifacts are highly appreciated.
                        The value should be a positive integer.
-                       [default: 2048]
     --brightness=BRI   Brightness computed by this program is linear, from black
                        (when the FFT is 0) to white (when the FFT is at the absolute
                        maximum within the file). This gives quite dark images which
@@ -47,6 +46,7 @@ import sys
 
 FULL_HD_WIDTH = 1920
 FULL_HD_HEIGHT = 1080
+FPS = 30
 CHUNK_SIZE = 1024
 BETA = 1.7952
 
@@ -60,20 +60,23 @@ def kaiser(length):
 def bytes_from_pcm(pcm, window, step):
     """Yields byte chunks of `window` size from the `pcm` stream.
 
-    Last chunk might be shorter.
+    Data is padded on both ends with half a window. This way both the first and
+    the last FFT is computed against the first and the last sample in the audio
+    file.
     """
-    if not window:
-        window = pcm.sample_rate * pcm.bits_per_sample // 8
-    print('       window:', window)
-    print('         step:', step)
-    data = b''
+    _padding = b'\x00' * (window // 2)
+    data = _padding
     frames = pcm.read(CHUNK_SIZE)
     while len(frames):
         data += frames.channel(0).to_bytes(False, True)
-        while len(data) > window:
+        while len(data) >= window:
             yield data[:window]
             data = data[step:]
         frames = pcm.read(CHUNK_SIZE)
+    data += _padding
+    while len(data) >= window:
+        yield data[:window]
+        data = data[step:]
 
 
 def freq_from_pcm(pcm, window, step):
@@ -83,7 +86,7 @@ def freq_from_pcm(pcm, window, step):
         yield numpy.fft.rfft(data * kaiser(len(data)))
 
 
-def get_part(value):
+def get_color_channel(value):
     if value <= 0:
         return 0
 
@@ -94,14 +97,14 @@ def get_part(value):
 def get_color(value, brightness):
     value *= brightness
 
-    b = get_part(value)
-    g = get_part(value - 1/3)
-    r = get_part(value - 2/3)
+    b = get_color_channel(value)
+    g = get_color_channel(value - 1/3)
+    r = get_color_channel(value - 2/3)
 
     return r, g, b
 
 
-def main(file, window=None, step=2048, brightness=8):
+def main(file, window=None, step=None, brightness=8):
     minimum = None
     maximum = None
     average = 0
@@ -111,11 +114,19 @@ def main(file, window=None, step=2048, brightness=8):
     audiofile = audiotools.open(file)
     freq_samples = []
     with audiofile.to_pcm() as pcm:
+        _bytes_per_sample = pcm.bits_per_sample // 8
+        _samples_per_second = pcm.sample_rate * _bytes_per_sample
+        window = window or _samples_per_second
+        step = step or int(round(_samples_per_second / FPS))
+
         print(file)
-        print('     duration:', int(audiofile.seconds_length()))
+        print('     duration:', float(audiofile.seconds_length()))
         print('  sample rate:', pcm.sample_rate)
         print('         bits:', pcm.bits_per_sample)
         print('     channels:', pcm.channels)
+        print('       window:', window)
+        print('         step:', step)
+
         for freq in freq_from_pcm(pcm, window, step):
             half = int(len(freq) / 16)
             width += 1
