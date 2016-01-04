@@ -5,27 +5,35 @@
 spectro - creates a spectrogram suited for synchronized Full HD display.
 
 Usage:
-    spectro [--window=WIN] [--step=STEP] [--brightness=BRI] <file>
+    spectro [--window=WIN] [--step=STEP] [--brightness=BRI] [--fps=FPS] \
+[--width=WIDTH] [--height=HEIGHT] <file>
     spectro --help
 
 Options:
     <file>             Path to a file.
     --window=WIN       How big should a single chunk given to the FFT be. By
-                       default this is computed as 'sample_rate * bytes_per_sample'
-                       in the given audio file. Larger values give more detailed
-                       images but require more computation. The value should be
-                       a positive integer.
-    --step=STEP        How much should the window move between two consecutive FFT
-                       calculations. If this value is much smaller than --window,
-                       the resulting image is going to be wider but the overlap in
-                       calculations will result in a ripple effect. Note: ideas how
-                       to minimize those artifacts are highly appreciated.
-                       The value should be a positive integer.
-    --brightness=BRI   Brightness computed by this program is linear, from black
-                       (when the FFT is 0) to white (when the FFT is at the absolute
-                       maximum within the file). This gives quite dark images which
-                       is why an input multiplier is used to bump brightness.
-                       [default: 8]
+                       default this is computed as 'sample_rate
+                       * bytes_per_sample' in the given audio file. Larger
+                       values give more detailed images but require more
+                       computation. The value should be a positive integer.
+    --step=STEP        How much should the window move between two consecutive
+                       FFT calculations. If this value is much smaller than
+                       `--window`, the resulting image is going to be wider but
+                       the overlap in calculations will result in a ripple
+                       effect. The value should be a positive integer. By
+                       default this is calculated automatically based on
+                       `--window` and `--fps`.
+    --brightness=BRI   Brightness computed by this program is linear, from
+                       black (when the FFT is 0) to white (when the FFT is at
+                       the absolute maximum within the file). This gives quite
+                       dark images which is why an input multiplier is used to
+                       bump brightness.  [default: 8]
+    --fps=FPS          Calculate step towards this amount of frames per second
+                       in a video. [default: 30]
+    --width=WIDTH      Prepend this amount of pixels left of the image.
+                       [default: 1920]
+    --height=HEIGHT    Crop higher frequencies to leave this many pixels.
+                       [default: 1080]
     -h, --help         This info.
 """
 
@@ -44,9 +52,6 @@ from PIL import Image
 import sys
 
 
-FULL_HD_WIDTH = 1920
-FULL_HD_HEIGHT = 1080
-FPS = 30
 CHUNK_SIZE = 1024
 BETA = 1.7952
 
@@ -104,7 +109,10 @@ def get_color(value, brightness):
     return r, g, b
 
 
-def main(file, window=None, step=None, brightness=8):
+def main(
+    file, window=None, step=None, brightness=8, prepend=0, fps=30,
+    crop_height=1080,
+):
     minimum = None
     maximum = None
     average = 0
@@ -117,7 +125,7 @@ def main(file, window=None, step=None, brightness=8):
         _bytes_per_sample = pcm.bits_per_sample // 8
         _samples_per_second = pcm.sample_rate * _bytes_per_sample
         window = window or _samples_per_second
-        step = step or int(round(_samples_per_second / FPS))
+        step = step or int(round(_samples_per_second / fps))
 
         print(file)
         print('     duration:', float(audiofile.seconds_length()))
@@ -125,10 +133,14 @@ def main(file, window=None, step=None, brightness=8):
         print('         bits:', pcm.bits_per_sample)
         print('     channels:', pcm.channels)
         print('       window:', window)
-        print('         step:', step)
+        print('         step:', step, '(fps: {})'.format(fps))
 
         for freq in freq_from_pcm(pcm, window, step):
-            half = int(len(freq) / 16)
+            half = 0
+            for modifier in [16, 12, 8, 4, 2]:
+                half = int(len(freq) / modifier)
+                if half >= crop_height:
+                    break
             width += 1
 
             height = max(height, half)
@@ -149,17 +161,17 @@ def main(file, window=None, step=None, brightness=8):
             freq_samples.append(_sample)
 
     average = int(round(average / width))
-    if height > FULL_HD_HEIGHT:
-        height = FULL_HD_HEIGHT
+    if height > crop_height:
+        height = crop_height
     threshold = maximum - minimum
-    rgb = numpy.zeros((height, width, 3), 'uint8')
+    rgb = numpy.zeros((height, width + prepend, 3), 'uint8')
 
     print('  image width:', width)
     print(' image height:', height)
     print('    threshold:', threshold)
     print('      average:', average)
 
-    for x, freq in enumerate(freq_samples):
+    for x, freq in enumerate(freq_samples, prepend):
         freq = freq[:height]
         for y, f in enumerate(reversed(freq)):
             f /= threshold
@@ -174,7 +186,14 @@ def main(file, window=None, step=None, brightness=8):
 
 if __name__ == '__main__':
     args = docopt.docopt(__doc__)
-    for arg in ('--window', '--step', '--brightness'):
+    for arg in (
+        '--brightness',
+        '--fps',
+        '--height',
+        '--step',
+        '--width',
+        '--window',
+    ):
         if not args[arg]:
             continue
 
@@ -186,11 +205,12 @@ if __name__ == '__main__':
                 file=sys.stderr,
             )
             sys.exit(1)
-    #import profile
-    #profile.run("main(file='{}')".format(args['<file>']), filename='prof.stats')
     main(
         file=args['<file>'],
         window=args['--window'],
         step=args['--step'],
         brightness=args['--brightness'],
+        prepend=args['--width'],
+        crop_height=args['--height'],
+        fps=args['--fps'],
     )
