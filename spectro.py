@@ -6,7 +6,8 @@ spectro - creates a spectrogram suited for synchronized Full HD display.
 
 Usage:
     spectro [--window=WIN] [--step=STEP] [--brightness=BRI] [--fps=FPS] \
-[--width=WIDTH] [--height=HEIGHT] <file>
+[--width=WIDTH] [--height=HEIGHT] [--colors=COLORS] <file>
+    spectro [--colors=COLORS] --show-palette
     spectro --help
 
 Options:
@@ -34,6 +35,11 @@ Options:
                        [default: 1920]
     --height=HEIGHT    Crop higher frequencies to leave this many pixels.
                        [default: 1080]
+    --colors=COLORS    Comma-separated HTML colors that will be introduced in
+                       the spectrum. The shortened form (e.g. #fff) is not
+                       supported.
+                       [default: #000000,#0000d0,#00a0a0,#00d000,#ffffff]
+    --show-palette     Don't generate a spectrogram but a palette instead.
     -h, --help         This info.
 """
 
@@ -44,6 +50,7 @@ from __future__ import unicode_literals
 
 
 import audiotools
+from colorsys import rgb_to_hsv, hsv_to_rgb
 import docopt
 from functools import lru_cache
 import numpy
@@ -69,7 +76,7 @@ def bytes_from_pcm(pcm, window, step):
     the last FFT is computed against the first and the last sample in the audio
     file.
     """
-    _padding = b'\x00' * (window // 2)
+    _padding = b'\x00' * window
     data = _padding
     frames = pcm.read(CHUNK_SIZE)
     while len(frames):
@@ -91,33 +98,99 @@ def freq_from_pcm(pcm, window, step):
         yield numpy.fft.rfft(data * kaiser(len(data)))
 
 
-def get_color_channel(value):
-    if value <= 0:
-        return 0
+def convert_html_to_hsv(colors):
+    colors = colors.replace('#', '')
+    colors = colors.split(',')
+    newcolors = []
+    for color in colors:
+        color = color.strip()
+        if len(color) != 6:
+            raise ValueError("Invalid color: {}".format(color))
+        r = int(color[0:2], 16) / 255
+        g = int(color[2:4], 16) / 255
+        b = int(color[4:6], 16) / 255
+        newcolors.append(rgb_to_hsv(r, g, b))
 
-    result = min(value, 1/3) * 3
-    return int(round(255 * result))
+    # fix black and white so that the transitions aren't too jarring
+    black = newcolors[0]
+    first_color = newcolors[1]
+    if abs(black[0] - first_color[0] + black[1] - first_color[1]) > 1:
+        newcolors[0] = first_color[0], first_color[1], black[2]
+    white = newcolors[-1]
+    last_color = newcolors[-2]
+    if abs(white[0] - last_color[0] + white[1] - last_color[1]) > 1:
+        newcolors[-1] = last_color[0], white[1], white[2]
+
+    return newcolors
 
 
-def get_color(value, brightness):
-    value *= brightness
+def colors_to_buckets(colors, min=0, max=1):
+    step = (max - min) / (len(colors) - 1)
+    newcolors = []
+    for i in range(len(colors)):
+        newcolors.append((min + i * step, colors[i]))
+    return tuple(newcolors)
 
-    b = get_color_channel(value)
-    g = get_color_channel(value - 1/3)
-    r = get_color_channel(value - 2/3)
 
-    return r, g, b
+def get_color(value, brightness, color_buckets):
+    value *= brightness  # assuming signal is between 0.0 and 1.0
+
+    last_bucket = None
+    last_color = None
+    transition = 0
+    for curr_bucket, curr_color in color_buckets:
+        if curr_bucket >= value:
+            if last_bucket is not None:
+                transition = (value - last_bucket) / (curr_bucket - last_bucket)
+            else:
+                last_color = curr_color
+            break
+
+        last_bucket = curr_bucket
+        last_color = curr_color
+
+    h = last_color[0] + transition * (curr_color[0] - last_color[0])
+    s = last_color[1] + transition * (curr_color[1] - last_color[1])
+    v = last_color[2] + transition * (curr_color[2] - last_color[2])
+    return tuple(int(round(255 * c)) for c in hsv_to_rgb(h, s, v))
+
+
+def show_palette(colors):
+    print('computing palette with colors:', colors)
+    colors = convert_html_to_hsv(colors)
+    color_buckets = colors_to_buckets(colors, min=0, max=1)
+    print('buckets:', color_buckets)
+    rgb = numpy.zeros((1000, 1000, 3), 'uint8')
+    for x in range(1000):
+        point = x / 1000
+        color = get_color(point, 1, color_buckets)
+        if x % 10 == 0:
+            print("{:.3f}".format(point), color)
+        for y in range(1000):
+            rgb[y, x] = color
+    print('creating in-memory PNG image')
+    i = Image.fromarray(rgb, mode='RGB')
+    img_path = '_palette.png'
+    print('saving image to', img_path)
+    i.save(img_path)
+
 
 
 def main(
     file, window=None, step=None, brightness=8, prepend=0, fps=30,
-    crop_height=1080,
+    crop_height=1080, colors=None,
 ):
     minimum = None
     maximum = None
     average = 0
     width = 0
     height = 0
+
+    if not colors:
+        colors = '#000000,#0000ff,#008080,#00ff00,#ffffff'
+
+    colors = convert_html_to_hsv(colors)
+    color_buckets = colors_to_buckets(colors, min=0, max=1)
 
     audiofile = audiotools.open(file)
     freq_samples = []
@@ -134,6 +207,7 @@ def main(
         print('     channels:', pcm.channels)
         print('       window:', window)
         print('         step:', step, '(fps: {})'.format(fps))
+        print('calculating FFT...', end='\r')
 
         for freq in freq_from_pcm(pcm, window, step):
             half = 0
@@ -170,12 +244,18 @@ def main(
     print(' image height:', height)
     print('    threshold:', threshold)
     print('      average:', average)
+    print('applying colors')
+
+    custom_black = get_color(0, brightness, color_buckets)
+    for x in range(prepend):
+        for y in range(height):
+            rgb[y, x] = custom_black
 
     for x, freq in enumerate(freq_samples, prepend):
         freq = freq[:height]
         for y, f in enumerate(reversed(freq)):
             f /= threshold
-            rgb[y, x] = get_color(f, brightness)
+            rgb[y, x] = get_color(f, brightness, color_buckets)
 
     print('creating in-memory PNG image')
     i = Image.fromarray(rgb, mode='RGB')
@@ -205,12 +285,18 @@ if __name__ == '__main__':
                 file=sys.stderr,
             )
             sys.exit(1)
-    main(
-        file=args['<file>'],
-        window=args['--window'],
-        step=args['--step'],
-        brightness=args['--brightness'],
-        prepend=args['--width'],
-        crop_height=args['--height'],
-        fps=args['--fps'],
-    )
+    if args['--show-palette']:
+        show_palette(
+            colors=args['--colors'],
+        )
+    else:
+        main(
+            file=args['<file>'],
+            window=args['--window'],
+            step=args['--step'],
+            brightness=args['--brightness'],
+            prepend=args['--width'],
+            crop_height=args['--height'],
+            fps=args['--fps'],
+            colors=args['--colors'],
+        )
