@@ -114,7 +114,7 @@ def main(file):
         base_im.paste(resized_source, (w // 16, h // 16))
         base_im.save(target, "png")
 
-    os.system("open -a Pixelmator " + target_file)
+    os.system("open -a Pixelmator \"" + target_file + "\"")
 
 
 if __name__ == '__main__':
