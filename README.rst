@@ -10,12 +10,8 @@ Installation
 
 tl;dr::
 
-  $ pyvenv-3.5 .venv
-  $ . .venv/bin/activate
-  (.venv) $ pip install -r requirements.txt
-
-This script works with Python 3, although it should be trivially
-modifiable to work with Python 2.7.
+  $ vf new spectro
+  (spectro) $ pip install -r requirements.txt
 
 Audio files are parsed to PCM using ``audiotools``, FFT calculation is
 provided by ``numpy`` and ``.png`` files are written with ``Pillow``.
@@ -38,38 +34,46 @@ for you:
 * lame
 * wavpack
 
-I also had to edit ``setup.py`` to force the paths of mp3lame::
+I also had to edit ``setup.py`` to force the paths of mp3lame and
+opusfile::
 
   diff --git a/setup.py b/setup.py
-  index 2f007592..a3469f10 100755
+  index 2f007592..d31c6548 100755
   --- a/setup.py
   +++ b/setup.py
-  @@ -815,6 +815,9 @@ class audiotools_encoders(Extension):
+  @@ -721,6 +721,8 @@ class audiotools_decoders(Extension):
+                      system_libraries.extra_compile_args("opusfile"))
+                  extra_link_args.extend(
+                      system_libraries.extra_link_args("opusfile"))
+  +                extra_compile_args.append('-I/opt/homebrew/include')
+  +                extra_link_args.append('-L/opt/homebrew/lib')
+              defines.append(("HAS_OPUS", None))
+              sources.append("src/decoders/opus.c")
+              self.__library_manifest__.append(("opusfile",
+  @@ -815,6 +817,9 @@ class audiotools_encoders(Extension):
               self.__library_manifest__.append(("mp3lame",
                                                 "MP3 encoding",
                                                 True))
-  +            extra_compile_args.append('-I/usr/local/opt/lame/include')
-  +            extra_link_args.append('-L/usr/local/opt/lame/lib')
+  +            extra_compile_args.append('-I/opt/homebrew/include')
+  +            extra_link_args.append('-L/opt/homebrew/lib')
   +            extra_link_args.append('-lmp3lame')
           else:
               self.__library_manifest__.append(("mp3lame",
                                                 "MP3 encoding",
 
-Lastly, due to pkgconfig issues in those packages, run
-``ln -s ../opus opus`` in:
+A terrible hack.
 
-* /usr/local/opt/opus/include/opus; and
-* /usr/local/opt/opusfile/include/opus.
+Oh, and to *really* recompile what you've got in your python-audio-library
+checkout, do ``make clean && make`` there before ``pip install -e .``.
 
-Terrible hacks.
 
 Usage
 -----
 
 In its most basic form, just do::
 
-  $ . .venv/bin/activate
-  (.venv) $ spectro.py song.flac
+  $ vf activate spectro
+  (spectro) $ spectro.py song.flac
 
 This will generate a PNG file in the current working directory::
 
@@ -89,7 +93,7 @@ Help with any of the following highly appreciated.
 Speed
 ~~~~~
 
-On my laptop generating a PNG takes 36 seconds per minute of input.
+On my laptop generating a PNG takes 10 seconds per minute of input.
 
 Stereo
 ~~~~~~

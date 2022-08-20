@@ -1,2 +1,3 @@
 .venv
 *.png
+/python-audio-tools
